@@ -3,7 +3,6 @@ from PIL import Image
 from transformers import AutoProcessor, Gemma3ForConditionalGeneration
 import json
 from torch.utils.data import Dataset, DataLoader
-import kagglehub
 from pathlib import Path
 from os.path import join
 from tqdm import tqdm
@@ -18,7 +17,7 @@ ds_dir_fn='/content/drive/MyDrive/clevr/caa_cnt_val'
 vect_dir_fn = '/content/drive/MyDrive/clevr/caa_cnt_train'
 img_pth = '/content/CLEVR_v1.0/images/val'
 layers = [15, 14, 13]
-multipliers = [x / 2.0 for x in range(-4, 4, 1)] + [2.0]
+idx = 0  # global sample index
 
 
 def load_model():
@@ -62,16 +61,32 @@ def pil_collate_fn(batch):
     return {key: [item[key] for item in batch] for key in batch[0].keys()}
 
 
+def make_hook(layer, buf, key):
+    def hook(module, input, output):
+        buf[layer][idx:idx+output.size(0)] = output[:, -1, :].detach()
+    return hook
+
+
 def generate_save_vectors_for_behavior(model, processor, dataloader, fn, target_layers=[15]):
     model.eval()
+    idx = 0  # global sample index
+    N = len(dataloader.dataset)
+    D = model.config.hidden_size
 
-    pos_activations = {layer: [] for layer in target_layers}
-    neg_activations = {layer: [] for layer in target_layers}
+    pos_buf = {layer: torch.zeros((N, D), device=model.device) for layer in target_layers}
+    neg_buf = {layer: torch.zeros((N, D), device=model.device) for layer in target_layers}
 
     print(f"Extracting activations from layers: {target_layers}")
 
+    hooks = []
+    for layer in target_layers:
+        module = dict(model.named_modules())[layer]
+        hooks.append(module.register_forward_hook(make_hook(layer, pos_buf, "pos")))
+        hooks.append(module.register_forward_hook(make_hook(layer, neg_buf, "neg")))
+
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Processing Extraction Pairs"):
+            bsz = batch["image"].size(0)
             q = batch["question"][0]
             true_ans = batch["true_answer"][0]
             target_ans = batch["target_answer"][0]
@@ -86,41 +101,28 @@ def generate_save_vectors_for_behavior(model, processor, dataloader, fn, target_
                     ]
                 }
             ]
-
             base_prompt = processor.apply_chat_template(
                 messages,
                 tokenize=False,
                 add_generation_prompt=True
             )
-
             pos_text = base_prompt + target_ans
             neg_text = base_prompt + true_ans
-
             pos_inputs = processor(text=pos_text, images=image, return_tensors="pt").to(model.device)
-            pos_outputs = model(**pos_inputs, output_hidden_states=True)
-            
-            for layer in target_layers:
-                pos_act = pos_outputs.hidden_states[layer][0, -1, :].cpu()
-                pos_activations[layer].append(pos_act)
-            
-            del pos_outputs, pos_inputs
-
             neg_inputs = processor(text=neg_text, images=image, return_tensors="pt").to(model.device)
-            neg_outputs = model(**neg_inputs, output_hidden_states=True)
 
-            for layer in target_layers:
-                neg_act = neg_outputs.hidden_states[layer][0, -1, :].cpu()
-                neg_activations[layer].append(neg_act)
-            
-            del neg_outputs, neg_inputs
-            torch.cuda.empty_cache()
+            model(**pos_inputs, output_hidden_states=True)
+            model(**neg_inputs, output_hidden_states=True)
+
+            idx += bsz
+
+    for h in hooks:
+        h.remove()
 
     for layer in target_layers:
-        pos_tensor = torch.stack(pos_activations[layer]) # torch multi dim mean
-        neg_tensor = torch.stack(neg_activations[layer])
-        steering_vector = (pos_tensor - neg_tensor).mean(dim=0) # org code
-        torch.save(steering_vector, f"{fn}_{layer}.pt")
-        print('saved', fn, layer)
+        steering = (pos_buf[layer] - neg_buf[layer]).mean(dim=0)
+        torch.save(steering.cpu(), f"{fn}_{layer}.pt")
+        print("saved", fn, layer)
 
 
 def gen_ds_steering_vect(mod, proc, ds='100', layers=layers, ds_dir_fn=ds_dir_fn, vect_dir_fn=vect_dir_fn):
