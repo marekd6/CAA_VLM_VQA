@@ -60,10 +60,36 @@ def pil_collate_fn(batch):
     return {key: [item[key] for item in batch] for key in batch[0].keys()}
 
 
+def extract_hidden(output):
+    if isinstance(output, torch.Tensor):
+        return output
+
+    if isinstance(output, tuple) and isinstance(output[0], torch.Tensor):
+        return output[0]
+
+    if isinstance(output, list) and isinstance(output[0], torch.Tensor):
+        return output[0]
+
+    raise TypeError(f"Unsupported output type: {type(output)}")
+
+
 def make_hook(layer, buf, key):
     def hook(module, input, output):
-        buf[layer][idx:idx+output.size(0)] = output[:, -1, :].detach()
+        hidden = extract_hidden(output)      # (2B, seq, dim)
+        last_tok = hidden[:, -1, :].detach() # (2B, dim)
+        buf[layer][idx:idx+output.size(0)] = last_tok
     return hook
+
+
+# def make_hook(layer, pos_buf, neg_buf):
+#     def hook(module, input, output):
+#         hidden = extract_hidden(output)      # (2B, seq, dim)
+#         last_tok = hidden[:, -1, :].detach() # (2B, dim)
+
+#         B = last_tok.size(0) // 2
+#         pos_buf[layer][idx:idx+B] = last_tok[:B]
+#         neg_buf[layer][idx:idx+B] = last_tok[B:]
+#     return hook
 
 
 def generate_save_vectors_for_behavior(model, processor, dataloader, fn, target_layers=[15]):
@@ -77,11 +103,14 @@ def generate_save_vectors_for_behavior(model, processor, dataloader, fn, target_
 
     print(f"Extracting activations from layers: {target_layers}")
 
+    text_layers = model.model.language_model.layers   # 34 Gemma3DecoderLayer blocks
+
     hooks = []
-    for layer in target_layers:
-        module = dict(model.named_modules())[layer]
-        hooks.append(module.register_forward_hook(make_hook(layer, pos_buf, "pos")))
-        hooks.append(module.register_forward_hook(make_hook(layer, neg_buf, "neg")))
+
+    for idx in target_layers:
+        layer_module = text_layers[idx]
+        hooks.append(layer_module.register_forward_hook(make_hook(idx, pos_buf, 'pos')))
+        hooks.append(layer_module.register_forward_hook(make_hook(idx, pos_buf, 'neg')))
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Processing Extraction Pairs"):

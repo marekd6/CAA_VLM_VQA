@@ -14,8 +14,8 @@ model_id = "google/gemma-3-4b-it"
 
 ds_dir_fn = f'/content/drive/MyDrive/clevr/caa_{behaviour}_train'
 vect_dir_fn = ds_dir_fn
-img_pth = '/content/CLEVR_v1.0/images/val'
-layers = [15, 14, 13]
+img_pth = '/content/CLEVR_v1.0/images/train'
+layers = [x for x in range(34)]
 idx = 0  # global sample index
 
 
@@ -88,19 +88,24 @@ def generate_save_vectors_for_behavior(model, processor, dataloader, fn, target_
     model.eval()
     idx = 0  # global sample index
     N = len(dataloader.dataset)
-    D = model.config.hidden_size
+    D = model.config.text_config.hidden_size
 
     pos_buf = {layer: torch.zeros((N, D), device=model.device) for layer in target_layers}
     neg_buf = {layer: torch.zeros((N, D), device=model.device) for layer in target_layers}
 
     print(f"Extracting activations from layers: {target_layers}")
 
-    modules = dict(model.named_modules())
-    hooks = [modules[layer].register_forward_hook(make_hook(layer, pos_buf, neg_buf)) for layer in target_layers]
+    text_layers = model.model.language_model.layers   # 34 Gemma3DecoderLayer blocks
+
+    hooks = []
+
+    for idx in target_layers:
+        layer_module = text_layers[idx]
+        hooks.append(layer_module.register_forward_hook(make_hook(idx, pos_buf, neg_buf)))
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Processing Extraction Pairs"):
-            bsz = batch["image"].size(0)
+            bsz = len(batch["image"])
             q = batch["question"][0]
             true_ans = batch["true_answer"][0]
             target_ans = batch["target_answer"][0]
@@ -158,8 +163,5 @@ def main():
     proc, mod = load_model()
     gen_ds_steering_vect(mod, proc, '10')
     gen_ds_steering_vect(mod, proc, '100')
+    gen_ds_steering_vect(mod, proc, '500')
     gen_ds_steering_vect(mod, proc, '1000')
-
-
-if __name__ == '_main_':
-    main()

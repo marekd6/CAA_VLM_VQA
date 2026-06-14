@@ -9,16 +9,26 @@ from tqdm import tqdm
 from pathlib import Path
 
 
-behaviour = 'count'
-beh_answers = [str(i) for i in range(10)] if behaviour == 'count' else []
+behaviour = 'count_2_4'
 
 model_id = "google/gemma-3-4b-it"
 
-ds_dir_fn='/content/drive/MyDrive/clevr/caa_cnt_val'
-vect_dir_fn = '/content/drive/MyDrive/clevr/caa_cnt_train'
+ds_dir_fn = f'/content/drive/MyDrive/clevr/caa_{behaviour}_train'
+vect_dir_fn = ds_dir_fn
 img_pth = '/content/CLEVR_v1.0/images/val'
-layers = [15, 14, 13]
+layers = [x for x in range(34)]
 multipliers = [x / 2.0 for x in range(-4, 4, 1)] + [2.0]
+
+
+def gen_true_answ():
+    if behaviour == 'count':
+        return [str(i) for i in range(10)]
+    if behaviour == 'count_2_4':
+        return ['2']
+    return ['2']
+
+
+beh_answers = gen_true_answ()
 
 
 def behaviour_cond(true_answer):
@@ -80,6 +90,13 @@ class SteeringHook:
         self.target_layer = target_layer
         self.coefficient = coefficient
         self.handle = None
+        # self.text_layers = model.model.language_model.layers   # 34 Gemma3DecoderLayer blocks
+
+        # hooks = []
+
+        # for idx in target_layers:
+        #     layer_module = text_layers[idx]
+        #     hooks.append(layer_module.register_forward_hook(make_hook(idx, pos_buf, neg_buf)))
 
     def _hook_fn(self, module, inputs, output):
         if isinstance(output, tuple):
