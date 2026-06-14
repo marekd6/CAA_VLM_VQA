@@ -60,9 +60,27 @@ def pil_collate_fn(batch):
     return {key: [item[key] for item in batch] for key in batch[0].keys()}
 
 
-def make_hook(layer, buf, key):
+def extract_hidden(output):
+    if isinstance(output, torch.Tensor):
+        return output
+
+    if isinstance(output, tuple) and isinstance(output[0], torch.Tensor):
+        return output[0]
+
+    if isinstance(output, list) and isinstance(output[0], torch.Tensor):
+        return output[0]
+
+    raise TypeError(f"Unsupported output type: {type(output)}")
+
+
+def make_hook(layer, pos_buf, neg_buf):
     def hook(module, input, output):
-        buf[layer][idx:idx+output.size(0)] = output[:, -1, :].detach()
+        hidden = extract_hidden(output)      # (2B, seq, dim)
+        last_tok = hidden[:, -1, :].detach() # (2B, dim)
+
+        B = last_tok.size(0) // 2
+        pos_buf[layer][idx:idx+B] = last_tok[:B]
+        neg_buf[layer][idx:idx+B] = last_tok[B:]
     return hook
 
 
@@ -77,11 +95,8 @@ def generate_save_vectors_for_behavior(model, processor, dataloader, fn, target_
 
     print(f"Extracting activations from layers: {target_layers}")
 
-    hooks = []
-    for layer in target_layers:
-        module = dict(model.named_modules())[layer]
-        hooks.append(module.register_forward_hook(make_hook(layer, pos_buf, "pos")))
-        hooks.append(module.register_forward_hook(make_hook(layer, neg_buf, "neg")))
+    modules = dict(model.named_modules())
+    hooks = [modules[layer].register_forward_hook(make_hook(layer, pos_buf, neg_buf)) for layer in target_layers]
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Processing Extraction Pairs"):
@@ -109,10 +124,12 @@ def generate_save_vectors_for_behavior(model, processor, dataloader, fn, target_
             neg_text = base_prompt + true_ans
             pos_inputs = processor(text=pos_text, images=image, return_tensors="pt").to(model.device)
             neg_inputs = processor(text=neg_text, images=image, return_tensors="pt").to(model.device)
+            batched = {
+                k: torch.cat([pos_inputs[k], neg_inputs[k]], dim=0).to(model.device)
+                for k in pos_inputs
+            }
 
-            model(**pos_inputs, output_hidden_states=True)
-            model(**neg_inputs, output_hidden_states=True)
-
+            model(**batched, output_hidden_states=True)
             idx += bsz
 
     for h in hooks:
@@ -127,6 +144,7 @@ def generate_save_vectors_for_behavior(model, processor, dataloader, fn, target_
 def gen_ds_steering_vect(mod, proc, ds='100', layers=layers, ds_dir_fn=ds_dir_fn, vect_dir_fn=vect_dir_fn):
     extract_dataset = CLEVRExtractionDataset(f'{ds_dir_fn}_{ds}.jsonl', img_pth)
     extract_loader = DataLoader(extract_dataset, batch_size=1, shuffle=False, collate_fn=pil_collate_fn)
+
     generate_save_vectors_for_behavior(
         model=mod,
         processor=proc, 
