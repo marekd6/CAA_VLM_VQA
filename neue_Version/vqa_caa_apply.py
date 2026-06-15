@@ -7,14 +7,15 @@ from torch.utils.data import Dataset, DataLoader
 from collections import defaultdict
 from tqdm import tqdm
 from pathlib import Path
+import gc
 
 
 behaviour = 'count_2_4'
 
 model_id = "google/gemma-3-4b-it"
 
-ds_dir_fn = f'/content/drive/MyDrive/clevr/caa_{behaviour}_train'
-vect_dir_fn = ds_dir_fn
+ds_dir_fn = f'/content/drive/MyDrive/clevr/caa_{behaviour}_val'
+vect_dir_fn = f'/content/drive/MyDrive/clevr/caa_{behaviour}_train'
 img_pth = '/content/CLEVR_v1.0/images/val'
 layers = [x for x in range(34)]
 multipliers = [x / 2.0 for x in range(-4, 4, 1)] + [2.0]
@@ -80,7 +81,7 @@ def pil_collate_fn(batch):
 
 
 def valid_answ_tokens2(valid_answers, proc):
-    return {answ: proc.tokenizer.encode(answ, add_special_tokens=False) for answ in valid_answers}
+    return {answ: proc.tokenizer.encode(answ, add_special_tokens=False)[0] for answ in valid_answers}
 
 
 class SteeringHook:
@@ -90,13 +91,6 @@ class SteeringHook:
         self.target_layer = target_layer
         self.coefficient = coefficient
         self.handle = None
-        # self.text_layers = model.model.language_model.layers   # 34 Gemma3DecoderLayer blocks
-
-        # hooks = []
-
-        # for idx in target_layers:
-        #     layer_module = text_layers[idx]
-        #     hooks.append(layer_module.register_forward_hook(make_hook(idx, pos_buf, neg_buf)))
 
     def _hook_fn(self, module, inputs, output):
         if isinstance(output, tuple):
@@ -132,8 +126,8 @@ def evaluate_steering_vector(model, processor, dataloader, steering_vector, targ
     model.eval()
 
     metrics = defaultdict(lambda: {
-        "total": 0, 
-        "sum_prob_true": 0.0, 
+        "total": 0,
+        "sum_prob_true": 0.0,
         "sum_prob_target": 0.0
     })
 
@@ -163,18 +157,18 @@ def evaluate_steering_vector(model, processor, dataloader, steering_vector, targ
 
             inputs = processor(text=eval_prompt, images=image, return_tensors="pt").to(model.device)
             outputs = model(**inputs)
-            
+
             answ_token_logits = outputs.logits[:, -1, :]
-            answ_token_probabs = F.softmax(answ_token_logits.to(torch.float32), dim=-1)
-            prob_dict = {answ: answ_token_probabs[token].item() for answ, token in token_map}
+            answ_token_probabs = F.softmax(answ_token_logits.to(torch.float32), dim=-1).squeeze()
+            prob_dict = {answ: answ_token_probabs[token].item() for answ, token in token_map.items()}
 
             stats = metrics[q_type]
             stats["total"] += 1
-            stats["p_true"] += prob_dict.get(true_ans, 0.0)
-            stats["p_target"] += prob_dict.get(target_ans, 0.0)
+            stats["sum_prob_true"] += prob_dict.get(true_ans, 0.0)
+            stats["sum_prob_target"] += prob_dict.get(target_ans, 0.0)
 
     hook.remove()
-    
+
     final_metrics = {}
     for q_type, stats in metrics.items():
         total = stats["total"]
@@ -182,21 +176,21 @@ def evaluate_steering_vector(model, processor, dataloader, steering_vector, targ
             "avg_prob_true": stats["sum_prob_true"] / total if total > 0 else 0,
             "avg_prob_target": stats["sum_prob_target"] / total if total > 0 else 0
         }
-        
+
     return final_metrics
 
 
 def eval_ds_steered(mod, proc, answ_tokens, ds='100', layers=layers, ds_dir_fn=ds_dir_fn, vect_dir_fn=vect_dir_fn, multipliers=multipliers):
-    extract_dataset = CLEVRCAAEvaluationDataset(f'{ds_dir_fn}{ds}.jsonl', img_pth)
+    extract_dataset = CLEVRCAAEvaluationDataset(f'{ds_dir_fn}_{ds}.jsonl', img_pth)
     dl = DataLoader(extract_dataset, batch_size=1, shuffle=False, collate_fn=pil_collate_fn)
 
-    for target_layer in layers:
+    for target_layer in reversed(layers):
         print("Evaluating on layer", target_layer)
         steering_vector = torch.load(f"{vect_dir_fn}_{ds}_{target_layer}.pt")
 
         sweep_results = {}
         for mult in multipliers:
-            print("Evaluating with", mult, 'multiplier')  
+            print("Evaluating with", mult, 'multiplier')
             sweep_results[mult] = evaluate_steering_vector(
                 model=mod,
                 processor=proc,
@@ -218,23 +212,32 @@ def eval_ds_steered(mod, proc, answ_tokens, ds='100', layers=layers, ds_dir_fn=d
             for q_type, stats in metrics.items():
                 avg_true = stats["avg_prob_true"]
                 avg_target = stats["avg_prob_target"]
-        
+
                 shift_true = avg_true - baseline_metrics[q_type]["avg_prob_true"]
                 shift_target = avg_target - baseline_metrics[q_type]["avg_prob_target"]
 
                 print(mult, q_type, 'P(True)', avg_true, 'd(True)', shift_true, 'P(Target)', avg_target, 'd(Target)', shift_target)
-        
+
         with open(f"{vect_dir_fn}_{ds}_{target_layer}.json", "w") as f:
             json.dump(sweep_results, f, indent=4)
 
 
 def main():
-    proc, mod = load_model()
-    answ_tokens = valid_answ_tokens2(beh_answers, proc)
-    eval_ds_steered(mod, proc, answ_tokens, '10')
-    eval_ds_steered(mod, proc, answ_tokens, '100')
-    eval_ds_steered(mod, proc, answ_tokens, '1000')
-
+    gc.collect()
+    torch.cuda.empty_cache()
+    try:
+      proc, mod = load_model()
+      answ_tokens = valid_answ_tokens2(beh_answers, proc)
+      eval_ds_steered(mod, proc, answ_tokens, '10')
+      eval_ds_steered(mod, proc, answ_tokens, '100')
+      eval_ds_steered(mod, proc, answ_tokens, '500')
+      eval_ds_steered(mod, proc, answ_tokens, '1000')
+    finally:
+      del proc
+      del mod
+      del answ_tokens
+      gc.collect()
+      torch.cuda.empty_cache()
 
 if __name__ == '_main_':
     main()
