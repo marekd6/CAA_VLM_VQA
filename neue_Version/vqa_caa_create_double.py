@@ -165,3 +165,7 @@ def main():
     gen_ds_steering_vect(mod, proc, '100')
     gen_ds_steering_vect(mod, proc, '500')
     gen_ds_steering_vect(mod, proc, '1000')
+
+
+if __name__ == '_main_':
+    main()

@@ -14,8 +14,8 @@ model_id = "google/gemma-3-4b-it"
 
 ds_dir_fn = f'/content/drive/MyDrive/clevr/caa_{behaviour}_train'
 vect_dir_fn = ds_dir_fn
-img_pth = '/content/CLEVR_v1.0/images/val'
-layers = [15, 14, 13]
+img_pth = '/content/CLEVR_v1.0/images/train'
+layers = [x for x in range(34)]
 idx = 0  # global sample index
 
 
@@ -79,17 +79,6 @@ def make_hook(layer, buf, key):
         last_tok = hidden[:, -1, :].detach() # (2B, dim)
         buf[layer][idx:idx+output.size(0)] = last_tok
     return hook
-
-
-# def make_hook(layer, pos_buf, neg_buf):
-#     def hook(module, input, output):
-#         hidden = extract_hidden(output)      # (2B, seq, dim)
-#         last_tok = hidden[:, -1, :].detach() # (2B, dim)
-
-#         B = last_tok.size(0) // 2
-#         pos_buf[layer][idx:idx+B] = last_tok[:B]
-#         neg_buf[layer][idx:idx+B] = last_tok[B:]
-#     return hook
 
 
 def generate_save_vectors_for_behavior(model, processor, dataloader, fn, target_layers=[15]):
