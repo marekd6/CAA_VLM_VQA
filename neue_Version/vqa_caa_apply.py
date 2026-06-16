@@ -9,31 +9,41 @@ from tqdm import tqdm
 from pathlib import Path
 import gc
 
+HF = ''
 
-behaviour = 'count_2_4'
+
+behaviour = 'count'
+opt = '_opt'
+opt = ''
 
 model_id = "google/gemma-3-4b-it"
 
-ds_dir_fn = f'/content/drive/MyDrive/clevr/caa_{behaviour}_val'
-vect_dir_fn = f'/content/drive/MyDrive/clevr/caa_{behaviour}_train'
-img_pth = '/content/CLEVR_v1.0/images/val'
+data_dir = ''
+save_dir = ''
+
+ds_dir_fn = f'{data_dir}/caa_{behaviour}_val{opt}'
+vect_dir_fn = f'{data_dir}/caa_{behaviour}_train{opt}'
+img_pth = f'{save_dir}/images/val'
 layers = [x for x in range(34)]
 multipliers = [x / 2.0 for x in range(-4, 4, 1)] + [2.0]
 
 
-def gen_true_answ():
+def gen_true_answers() -> list:
     if behaviour == 'count':
-        return [str(i) for i in range(10)]
-    if behaviour == 'count_2_4':
-        return ['2']
+        return [str(i) for i in range(11)]
     return ['2']
 
+beh_answers = gen_true_answers()
 
-beh_answers = gen_true_answ()
+
+def gen_answ_options() -> str:
+    suffix = '\nChoices:'
+    for i, answ in enumerate(beh_answers):
+        suffix += f'\n{i}{answ}'
+    return suffix
 
 
-def behaviour_cond(true_answer):
-    return str(true_answer) in beh_answers
+beh_answers = beh_answers if opt == '' else gen_answ_options()
 
 
 def load_model():
@@ -41,7 +51,8 @@ def load_model():
   model = Gemma3ForConditionalGeneration.from_pretrained(
     model_id,
     device_map="auto",
-    dtype=torch.bfloat16
+    dtype=torch.bfloat16,
+    token=HF
   ).eval()
   return processor, model
 
@@ -65,7 +76,7 @@ class CLEVRCAAEvaluationDataset(Dataset):
         image_path = self.image_dir / q['image_path']
         image = Image.open(image_path).convert('RGB')
         true_answer = str(q['true_answer'])
-        q_type = behaviour if behaviour_cond(true_answer) else "other"
+        q_type = q['q_type']
 
         return {
             "image": image,

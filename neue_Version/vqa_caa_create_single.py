@@ -7,14 +7,21 @@ from pathlib import Path
 from os.path import join
 from tqdm import tqdm
 
+HF = ''
 
-behaviour = 'count_2_4'
+
+behaviour = 'count'
+opt = '_opt'
+opt = ''
 
 model_id = "google/gemma-3-4b-it"
 
-ds_dir_fn = f'/content/drive/MyDrive/clevr/caa_{behaviour}_train'
+data_dir = ''
+save_dir = ''
+
+ds_dir_fn = f'{data_dir}/caa_{behaviour}_train{opt}'
 vect_dir_fn = ds_dir_fn
-img_pth = '/content/CLEVR_v1.0/images/train'
+img_pth = f'{save_dir}/images/train'
 layers = [x for x in range(34)]
 idx = 0  # global sample index
 
@@ -24,7 +31,8 @@ def load_model():
     model = Gemma3ForConditionalGeneration.from_pretrained(
         model_id,
         device_map="auto",
-        dtype=torch.bfloat16
+        dtype=torch.bfloat16,
+        token=HF
     ).eval()
     return processor, model
 
@@ -158,6 +166,7 @@ def main():
     proc, mod = load_model()
     gen_ds_steering_vect(mod, proc, '10')
     gen_ds_steering_vect(mod, proc, '100')
+    gen_ds_steering_vect(mod, proc, '500')
     gen_ds_steering_vect(mod, proc, '1000')
 
 
