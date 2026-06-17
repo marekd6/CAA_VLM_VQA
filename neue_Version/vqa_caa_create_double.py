@@ -7,8 +7,6 @@ from pathlib import Path
 from os.path import join
 from tqdm import tqdm
 
-HF = ''
-
 
 behaviour = 'count'
 opt = '_opt'
@@ -16,12 +14,12 @@ opt = ''
 
 model_id = "google/gemma-3-4b-it"
 
-data_dir = ''
-save_dir = ''
+data_dir = '/data/5drwal'
+clevr_dir = '/informatik/wtm/datasets/External Datasets/CLEVR/CLEVR_v1.0'
 
 ds_dir_fn = f'{data_dir}/caa_{behaviour}_train{opt}'
 vect_dir_fn = ds_dir_fn
-img_pth = f'{save_dir}/images/train'
+img_pth = f'{clevr_dir}/images/train'
 layers = [x for x in range(34)]
 idx = 0  # global sample index
 
@@ -31,10 +29,16 @@ def load_model():
     model = Gemma3ForConditionalGeneration.from_pretrained(
         model_id,
         device_map="auto",
-        dtype=torch.bfloat16,
-        token=HF
+        dtype=torch.bfloat16
     ).eval()
     return processor, model
+
+
+def pad_to(x, length, processor):
+    pad_len = length - x.shape[1]
+    if pad_len == 0:
+        return x
+    return torch.nn.functional.pad(x, (0, pad_len), value=processor.tokenizer.pad_token_id)
 
 
 class CLEVRExtractionDataset(Dataset):
@@ -137,10 +141,16 @@ def generate_save_vectors_for_behavior(model, processor, dataloader, fn, target_
             neg_text = base_prompt + true_ans
             pos_inputs = processor(text=pos_text, images=image, return_tensors="pt").to(model.device)
             neg_inputs = processor(text=neg_text, images=image, return_tensors="pt").to(model.device)
-            batched = {
-                k: torch.cat([pos_inputs[k], neg_inputs[k]], dim=0).to(model.device)
-                for k in pos_inputs
-            }
+            batched = {}
+            for k in pos_inputs:
+                max_len = max(pos_inputs[k].shape[1], neg_inputs[k].shape[1])
+                if pos_inputs[k].dim() == 2:  # sequence-like tensors
+                    pos_padded = pad_to(pos_inputs[k], max_len, processor)
+                    neg_padded = pad_to(neg_inputs[k], max_len, processor)
+                    batched[k] = torch.cat([pos_padded, neg_padded], dim=0).to(model.device)
+                else:
+                    # non-sequence tensors (e.g., images) can be concatenated directly
+                    batched[k] = torch.cat([pos_inputs[k], neg_inputs[k]], dim=0).to(model.device)
 
             model(**batched, output_hidden_states=True)
             idx += bsz
@@ -169,11 +179,17 @@ def gen_ds_steering_vect(mod, proc, ds='100', layers=layers, ds_dir_fn=ds_dir_fn
 
 def main():
     proc, mod = load_model()
-    gen_ds_steering_vect(mod, proc, '10')
+    # gen_ds_steering_vect(mod, proc, '10')
     gen_ds_steering_vect(mod, proc, '100')
-    gen_ds_steering_vect(mod, proc, '500')
-    gen_ds_steering_vect(mod, proc, '1000')
+    # gen_ds_steering_vect(mod, proc, '500')
+    # gen_ds_steering_vect(mod, proc, '1000')
 
 
-if __name__ == '_main_':
+if __name__ == '__main__':
+    if torch.cuda.is_available():
+        for d in range(torch.cuda.device_count()):
+            print(torch.cuda.get_device_name(d))
+            print(torch.cuda.get_device_capability(d))
+            print(torch.cuda.get_device_properties(d))
+    print('done')
     main()

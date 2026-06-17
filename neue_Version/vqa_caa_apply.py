@@ -9,8 +9,6 @@ from tqdm import tqdm
 from pathlib import Path
 import gc
 
-HF = ''
-
 
 behaviour = 'count'
 opt = '_opt'
@@ -18,12 +16,12 @@ opt = ''
 
 model_id = "google/gemma-3-4b-it"
 
-data_dir = ''
-save_dir = ''
+data_dir = '/data/5drwal'
+clevr_dir = '/informatik/wtm/datasets/External Datasets/CLEVR/CLEVR_v1.0'
 
 ds_dir_fn = f'{data_dir}/caa_{behaviour}_val{opt}'
 vect_dir_fn = f'{data_dir}/caa_{behaviour}_train{opt}'
-img_pth = f'{save_dir}/images/val'
+img_pth = f'{clevr_dir}/images/val'
 layers = [x for x in range(34)]
 multipliers = [x / 2.0 for x in range(-4, 4, 1)] + [2.0]
 
@@ -51,8 +49,7 @@ def load_model():
   model = Gemma3ForConditionalGeneration.from_pretrained(
     model_id,
     device_map="auto",
-    dtype=torch.bfloat16,
-    token=HF
+    dtype=torch.bfloat16
   ).eval()
   return processor, model
 
@@ -227,6 +224,9 @@ def eval_ds_steered(mod, proc, answ_tokens, ds='100', layers=layers, ds_dir_fn=d
                 shift_true = avg_true - baseline_metrics[q_type]["avg_prob_true"]
                 shift_target = avg_target - baseline_metrics[q_type]["avg_prob_target"]
 
+                stats['shift_true'] = shift_true
+                stats['shift_target'] = shift_target
+
                 print(mult, q_type, 'P(True)', avg_true, 'd(True)', shift_true, 'P(Target)', avg_target, 'd(Target)', shift_target)
 
         with open(f"{vect_dir_fn}_{ds}_{target_layer}.json", "w") as f:
@@ -234,21 +234,23 @@ def eval_ds_steered(mod, proc, answ_tokens, ds='100', layers=layers, ds_dir_fn=d
 
 
 def main():
+    print('a')
     gc.collect()
     torch.cuda.empty_cache()
     try:
+      print('b')
       proc, mod = load_model()
       answ_tokens = valid_answ_tokens2(beh_answers, proc)
-      eval_ds_steered(mod, proc, answ_tokens, '10')
+    #   eval_ds_steered(mod, proc, answ_tokens, '10')
       eval_ds_steered(mod, proc, answ_tokens, '100')
-      eval_ds_steered(mod, proc, answ_tokens, '500')
-      eval_ds_steered(mod, proc, answ_tokens, '1000')
+      print('c')
     finally:
       del proc
       del mod
       del answ_tokens
       gc.collect()
       torch.cuda.empty_cache()
+      print('fin')
 
-if __name__ == '_main_':
+if __name__ == '__main__':
     main()
