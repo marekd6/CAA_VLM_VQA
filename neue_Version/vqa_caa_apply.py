@@ -21,6 +21,7 @@ clevr_dir = '/informatik/wtm/datasets/External Datasets/CLEVR/CLEVR_v1.0'
 
 ds_dir_fn = f'{data_dir}/caa_{behaviour}_val{opt}'
 vect_dir_fn = f'{data_dir}/caa_{behaviour}_train{opt}'
+res_sub_dir = f'{data_dir}/res/caa_{behaviour}_train{opt}'
 img_pth = f'{clevr_dir}/images/val'
 layers = [x for x in range(34)]
 multipliers = [x / 2.0 for x in range(-4, 4, 1)] + [2.0]
@@ -136,7 +137,11 @@ def evaluate_steering_vector(model, processor, dataloader, steering_vector, targ
     metrics = defaultdict(lambda: {
         "total": 0,
         "sum_prob_true": 0.0,
-        "sum_prob_target": 0.0
+        "sum_prob_target": 0.0,
+        "sum_prob_true_norm": 0.0,
+        "sum_prob_target_norm": 0.0,
+        "sum_prob_true_filtered": 0.0,
+        "sum_prob_target_filtered": 0.0,
     })
 
     with torch.no_grad():
@@ -168,24 +173,86 @@ def evaluate_steering_vector(model, processor, dataloader, steering_vector, targ
 
             answ_token_logits = outputs.logits[:, -1, :]
             answ_token_probabs = F.softmax(answ_token_logits.to(torch.float32), dim=-1).squeeze()
+
             prob_dict = {answ: answ_token_probabs[token].item() for answ, token in token_map.items()}
+            norm_prob = get_valid_probs(token_map, prob_dict)
+            filtered_prob_dict = top_p_probs(token_map, answ_token_probabs)
 
             stats = metrics[q_type]
             stats["total"] += 1
             stats["sum_prob_true"] += prob_dict.get(true_ans, 0.0)
             stats["sum_prob_target"] += prob_dict.get(target_ans, 0.0)
 
+            stats["sum_prob_true_norm"] += norm_prob.get(true_ans, 0.0)
+            stats["sum_prob_target_norm"] += norm_prob.get(target_ans, 0.0)
+
+            stats["sum_prob_true_filtered"] += filtered_prob_dict.get(true_ans, 0.0)
+            stats["sum_prob_target_filtered"] += filtered_prob_dict.get(target_ans, 0.0)
+
+
     hook.remove()
 
     final_metrics = {}
     for q_type, stats in metrics.items():
         total = stats["total"]
-        final_metrics[q_type] = {
-            "avg_prob_true": stats["sum_prob_true"] / total if total > 0 else 0,
-            "avg_prob_target": stats["sum_prob_target"] / total if total > 0 else 0
-        }
+
+        if total > 0:
+            final_metrics[q_type] = {
+                # --- RAW PROBABILITIES ---
+                "avg_prob_true":   stats["sum_prob_true"]   / total,
+                "avg_prob_target": stats["sum_prob_target"] / total,
+
+                # --- NORMALIZED OVER VALID ANSWERS ---
+                "avg_prob_true_norm":   stats["sum_prob_true_norm"]   / total,
+                "avg_prob_target_norm": stats["sum_prob_target_norm"] / total,
+
+                # --- FILTERED (TOP‑P) PROBABILITIES ---
+                "avg_prob_true_filtered":   stats["sum_prob_true_filtered"]   / total,
+                "avg_prob_target_filtered": stats["sum_prob_target_filtered"] / total,
+            }
+        else:
+            final_metrics[q_type] = {
+                "avg_prob_true": 0.0,
+                "avg_prob_target": 0.0,
+                "avg_prob_true_norm": 0.0,
+                "avg_prob_target_norm": 0.0,
+                "avg_prob_true_filtered": 0.0,
+                "avg_prob_target_filtered": 0.0,
+            }
+
 
     return final_metrics
+
+
+def get_valid_probs(token_map, prob_dict):
+    valid_probs = torch.tensor([prob_dict[a] for a in token_map.keys()])
+    valid_sum = valid_probs.sum().item()
+
+    if valid_sum > 0:
+        norm_prob = {a: prob_dict[a] / valid_sum for a in token_map.keys()}
+    else:
+        norm_prob = {a: 0.0 for a in token_map.keys()}
+    return norm_prob
+
+
+def top_p_probs(token_map, answ_token_probabs):
+    sorted_probs, sorted_idx = torch.sort(answ_token_probabs, descending=True)
+    cumulative = torch.cumsum(sorted_probs, dim=0)
+
+    threshold = 0.7
+    mask = cumulative <= threshold
+
+    filtered_probs = sorted_probs[mask]
+    filtered_idx = sorted_idx[mask]
+    filtered_sum = filtered_probs.sum().item()
+
+    filtered_prob_dict = {}
+    for p, idx in zip(filtered_probs, filtered_idx):
+        tok = idx.item()
+        for answ, token_id in token_map.items():
+            if token_id == tok:
+                filtered_prob_dict[answ] = p.item() / filtered_sum
+    return filtered_prob_dict
 
 
 def eval_ds_steered(mod, proc, answ_tokens, ds='100', layers=layers, ds_dir_fn=ds_dir_fn, vect_dir_fn=vect_dir_fn, multipliers=multipliers):
@@ -209,28 +276,57 @@ def eval_ds_steered(mod, proc, answ_tokens, ds='100', layers=layers, ds_dir_fn=d
                 token_map=answ_tokens
             )
             for q_type, stats in sweep_results[mult].items():
-                avg_true = stats["avg_prob_true"]
-                avg_target = stats["avg_prob_target"]
-                print(mult, avg_true, avg_target)
+                print(
+                    mult,
+                    stats["avg_prob_true"],
+                    stats["avg_prob_target"],
+                    stats["avg_prob_true_norm"],
+                    stats["avg_prob_target_norm"],
+                    stats["avg_prob_true_filtered"],
+                    stats["avg_prob_target_filtered"],
+                )
 
+        # Baseline = multiplier 0.0
         baseline_metrics = sweep_results[0.0]
 
+        # Second pass: compute shifts for ALL metrics
         for mult, metrics in sweep_results.items():
-            print("Results with", mult, 'multiplier')
+            print("Results with", mult, "multiplier")
+
             for q_type, stats in metrics.items():
-                avg_true = stats["avg_prob_true"]
-                avg_target = stats["avg_prob_target"]
+                base = baseline_metrics[q_type]
 
-                shift_true = avg_true - baseline_metrics[q_type]["avg_prob_true"]
-                shift_target = avg_target - baseline_metrics[q_type]["avg_prob_target"]
+                # --- RAW ---
+                shift_true = stats["avg_prob_true"] - base["avg_prob_true"]
+                shift_target = stats["avg_prob_target"] - base["avg_prob_target"]
 
-                stats['shift_true'] = shift_true
-                stats['shift_target'] = shift_target
+                # --- NORMALIZED ---
+                shift_true_norm = stats["avg_prob_true_norm"] - base["avg_prob_true_norm"]
+                shift_target_norm = stats["avg_prob_target_norm"] - base["avg_prob_target_norm"]
 
-                print(mult, q_type, 'P(True)', avg_true, 'd(True)', shift_true, 'P(Target)', avg_target, 'd(Target)', shift_target)
+                # --- FILTERED ---
+                shift_true_filtered = stats["avg_prob_true_filtered"] - base["avg_prob_true_filtered"]
+                shift_target_filtered = stats["avg_prob_target_filtered"] - base["avg_prob_target_filtered"]
 
-        with open(f"{vect_dir_fn}_{ds}_{target_layer}.json", "w") as f:
+                # Save all shifts
+                stats["shift_true"] = shift_true
+                stats["shift_target"] = shift_target
+                stats["shift_true_norm"] = shift_true_norm
+                stats["shift_target_norm"] = shift_target_norm
+                stats["shift_true_filtered"] = shift_true_filtered
+                stats["shift_target_filtered"] = shift_target_filtered
+
+                # Print summary line
+                print(
+                    mult, q_type,
+                    "RAW:", stats["avg_prob_true"], shift_true, stats["avg_prob_target"], shift_target,
+                    "NORM:", stats["avg_prob_true_norm"], shift_true_norm, stats["avg_prob_target_norm"], shift_target_norm,
+                    "FILT:", stats["avg_prob_true_filtered"], shift_true_filtered, stats["avg_prob_target_filtered"], shift_target_filtered
+                )
+
+        with open(f"{res_sub_dir}_{ds}_{target_layer}.json", "w") as f:
             json.dump(sweep_results, f, indent=4)
+
 
 
 def main():
@@ -241,7 +337,9 @@ def main():
       print('b')
       proc, mod = load_model()
       answ_tokens = valid_answ_tokens2(beh_answers, proc)
-    #   eval_ds_steered(mod, proc, answ_tokens, '10')
+      for a, t in answ_tokens.items():
+          print(a, t)
+      eval_ds_steered(mod, proc, answ_tokens, '10')
       eval_ds_steered(mod, proc, answ_tokens, '100')
       print('c')
     finally:
