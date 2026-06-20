@@ -12,7 +12,7 @@ import gc
 
 behaviour = 'count'
 opt = '_opt'
-opt = ''
+# opt = ''
 
 model_id = "google/gemma-3-4b-it"
 
@@ -33,16 +33,7 @@ def gen_true_answers() -> list:
     return ['2']
 
 beh_answers = gen_true_answers()
-
-
-def gen_answ_options() -> str:
-    suffix = '\nChoices:'
-    for i, answ in enumerate(beh_answers):
-        suffix += f'\n{i}{answ}'
-    return suffix
-
-
-beh_answers = beh_answers if opt == '' else gen_answ_options()
+beh_answers = beh_answers if opt == '' else [str(i) for i in range(len(beh_answers))]
 
 
 def load_model():
@@ -198,15 +189,12 @@ def evaluate_steering_vector(model, processor, dataloader, steering_vector, targ
 
         if total > 0:
             final_metrics[q_type] = {
-                # --- RAW PROBABILITIES ---
                 "avg_prob_true":   stats["sum_prob_true"]   / total,
                 "avg_prob_target": stats["sum_prob_target"] / total,
 
-                # --- NORMALIZED OVER VALID ANSWERS ---
                 "avg_prob_true_norm":   stats["sum_prob_true_norm"]   / total,
                 "avg_prob_target_norm": stats["sum_prob_target_norm"] / total,
 
-                # --- FILTERED (TOP‑P) PROBABILITIES ---
                 "avg_prob_true_filtered":   stats["sum_prob_true_filtered"]   / total,
                 "avg_prob_target_filtered": stats["sum_prob_target_filtered"] / total,
             }
@@ -286,29 +274,23 @@ def eval_ds_steered(mod, proc, answ_tokens, ds='100', layers=layers, ds_dir_fn=d
                     stats["avg_prob_target_filtered"],
                 )
 
-        # Baseline = multiplier 0.0
         baseline_metrics = sweep_results[0.0]
 
-        # Second pass: compute shifts for ALL metrics
         for mult, metrics in sweep_results.items():
             print("Results with", mult, "multiplier")
 
             for q_type, stats in metrics.items():
                 base = baseline_metrics[q_type]
 
-                # --- RAW ---
                 shift_true = stats["avg_prob_true"] - base["avg_prob_true"]
                 shift_target = stats["avg_prob_target"] - base["avg_prob_target"]
 
-                # --- NORMALIZED ---
                 shift_true_norm = stats["avg_prob_true_norm"] - base["avg_prob_true_norm"]
                 shift_target_norm = stats["avg_prob_target_norm"] - base["avg_prob_target_norm"]
 
-                # --- FILTERED ---
                 shift_true_filtered = stats["avg_prob_true_filtered"] - base["avg_prob_true_filtered"]
                 shift_target_filtered = stats["avg_prob_target_filtered"] - base["avg_prob_target_filtered"]
 
-                # Save all shifts
                 stats["shift_true"] = shift_true
                 stats["shift_target"] = shift_target
                 stats["shift_true_norm"] = shift_true_norm
@@ -316,7 +298,6 @@ def eval_ds_steered(mod, proc, answ_tokens, ds='100', layers=layers, ds_dir_fn=d
                 stats["shift_true_filtered"] = shift_true_filtered
                 stats["shift_target_filtered"] = shift_target_filtered
 
-                # Print summary line
                 print(
                     mult, q_type,
                     "RAW:", stats["avg_prob_true"], shift_true, stats["avg_prob_target"], shift_target,
@@ -337,10 +318,12 @@ def main():
       print('b')
       proc, mod = load_model()
       answ_tokens = valid_answ_tokens2(beh_answers, proc)
+      print('token mapping')
       for a, t in answ_tokens.items():
           print(a, t)
       eval_ds_steered(mod, proc, answ_tokens, '10')
       eval_ds_steered(mod, proc, answ_tokens, '100')
+    #   eval_ds_steered(mod, proc, answ_tokens, '500')
       print('c')
     finally:
       del proc
