@@ -243,13 +243,13 @@ def top_p_probs(token_map, answ_token_probabs):
     return filtered_prob_dict
 
 
-def eval_ds_steered(mod, proc, answ_tokens, ds='100', layers=layers, ds_dir_fn=ds_dir_fn, vect_dir_fn=vect_dir_fn, multipliers=multipliers):
+def eval_ds_steered(mod, proc, answ_tokens, ds='100', vec_ds='100', layers=layers, ds_dir_fn=ds_dir_fn, vect_dir_fn=vect_dir_fn, multipliers=multipliers):
     extract_dataset = CLEVRCAAEvaluationDataset(f'{ds_dir_fn}_{ds}.jsonl', img_pth)
     dl = DataLoader(extract_dataset, batch_size=1, shuffle=False, collate_fn=pil_collate_fn)
 
     for target_layer in reversed(layers):
-        print("Evaluating on layer", target_layer)
-        steering_vector = torch.load(f"{vect_dir_fn}_{ds}_{target_layer}.pt")
+        print("Evaluating on layer", target_layer, 'for ds', ds, 'with vec size', vec_ds)
+        steering_vector = torch.load(f"{vect_dir_fn}_{vec_ds}_{target_layer}.pt")
 
         sweep_results = {}
         for mult in multipliers:
@@ -305,7 +305,7 @@ def eval_ds_steered(mod, proc, answ_tokens, ds='100', layers=layers, ds_dir_fn=d
                     "FILT:", stats["avg_prob_true_filtered"], shift_true_filtered, stats["avg_prob_target_filtered"], shift_target_filtered
                 )
 
-        with open(f"{res_sub_dir}_{ds}_{target_layer}.json", "w") as f:
+        with open(f"{res_sub_dir}_{ds}_{vec_ds}_{target_layer}.json", "w") as f:
             json.dump(sweep_results, f, indent=4)
 
 
@@ -321,7 +321,8 @@ def main():
       print('token mapping')
       for a, t in answ_tokens.items():
           print(a, t)
-      eval_ds_steered(mod, proc, answ_tokens, '10')
+      eval_ds_steered(mod, proc, answ_tokens, '10', '10')
+      eval_ds_steered(mod, proc, answ_tokens, '10', '100')
       eval_ds_steered(mod, proc, answ_tokens, '100')
     #   eval_ds_steered(mod, proc, answ_tokens, '500')
       print('c')
