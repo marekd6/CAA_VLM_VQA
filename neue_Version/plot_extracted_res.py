@@ -39,9 +39,13 @@ def plot_metric(data, category, metric, series_filter=None):
     plt.show()
 
 
-with open("gelungene_runs/caa_count_train_100_combined.json") as f:
+with open("gelungene_runs/caa_count_train_opt_100_100_combined.json") as f:
     data = json.load(f)
 
 plot_metric(data, "count", "shift_true", series_filter=["1.5", "-1.5"])
 plot_metric(data, "count", "shift_true_norm", series_filter=["1.5", "-1.5"])
 plot_metric(data, "count", "shift_true_filtered", series_filter=["1.5", "-1.5"])
+
+plot_metric(data, "count", "shift_target", series_filter=["1.5", "-1.5"])
+plot_metric(data, "count", "shift_target_norm", series_filter=["1.5", "-1.5"])
+plot_metric(data, "count", "shift_target_filtered", series_filter=["1.5", "-1.5"])
