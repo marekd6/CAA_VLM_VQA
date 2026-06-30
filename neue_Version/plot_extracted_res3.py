@@ -15,10 +15,10 @@ pair = (-2, 2)
 
 fig, axes = plt.subplots(
     2, 2,
-    # figsize=(10, 8),
     sharex=True,
     sharey='row',
-    # constrained_layout=True,
+    # layout='constrained'
+    layout='tight'
 )
 
 for ax, metric in zip(axes.flat, metrics):
@@ -35,13 +35,14 @@ for ax, metric in zip(axes.flat, metrics):
 
     ax.set_title(metric)
     ax.grid(alpha=0.3)
-    ax.margins(x=0)
 
-axes[0, 0].legend(title="Series")
+# axes[1, 1].legend(title="multiplier")
+# axes[1, 0].set_xlabel('layer')
+# axes[1, 1].set_xlabel('layer')
 
-# fig.supxlabel("Filename parameter")
-# fig.supylabel("Value")
-plt.subplots_adjust(left=0.1, right=0.4, top=0.4, bottom=0.1)
-fig.suptitle("Pair: -2 vs 2")
-fig.tight_layout()
+plt.legend(title="multiplier")
+fig.supxlabel('layer')
+
+fig.suptitle("Steering into false random counting, vect=100, test=100, closed choice opt")
 plt.show()
+# plt.savefig('cnt_100_100_opt.png')

@@ -131,6 +131,8 @@ def evaluate_steering_vector(model, processor, dataloader, steering_vector, targ
         "sum_prob_target": 0.0,
         "sum_prob_true_norm": 0.0,
         "sum_prob_target_norm": 0.0,
+        "sum_prob_true_norm2": 0.0,
+        "sum_prob_target_norm2": 0.0,
         "sum_prob_true_filtered": 0.0,
         "sum_prob_target_filtered": 0.0,
     })
@@ -162,12 +164,22 @@ def evaluate_steering_vector(model, processor, dataloader, steering_vector, targ
             inputs = processor(text=eval_prompt, images=image, return_tensors="pt").to(model.device)
             outputs = model(**inputs)
 
-            answ_token_logits = outputs.logits[:, -1, :]
-            answ_token_probabs = F.softmax(answ_token_logits.to(torch.float32), dim=-1).squeeze()
+            answ_token_logits = outputs.logits[:, -1, :].to(torch.float32)
+            answ_token_probabs = F.softmax(answ_token_logits, dim=-1).squeeze()
+            answ_token_probabs_norm = F.softmax(answ_token_logits[:, list(token_map.values())], dim=-1).squeeze()
 
             prob_dict = {answ: answ_token_probabs[token].item() for answ, token in token_map.items()}
+            prob_dict_norm = {answ: answ_token_probabs_norm[i].item() for i, answ in enumerate(token_map.keys())}
             norm_prob = get_valid_probs(token_map, prob_dict)
+            norm_prob2 = prob_dict_norm # get_valid_probs2(token_map, prob_dict2)
             filtered_prob_dict = top_p_probs(token_map, answ_token_probabs)
+
+            top_prob, top_token_id = torch.max(answ_token_probabs, dim=-1)
+            top_token_text = processor.tokenizer.decode(top_token_id)
+            print(f"Top overall prediction: '{top_token_text}' with probability: {top_prob.item():.4f}")
+            best_valid_answer = max(prob_dict, key=prob_dict.get)
+            best_valid_prob = prob_dict[best_valid_answer]
+            print(f"Top valid answer: '{best_valid_answer}' (Share of Top-P: {best_valid_prob})")
 
             stats = metrics[q_type]
             stats["total"] += 1
@@ -176,6 +188,8 @@ def evaluate_steering_vector(model, processor, dataloader, steering_vector, targ
 
             stats["sum_prob_true_norm"] += norm_prob.get(true_ans, 0.0)
             stats["sum_prob_target_norm"] += norm_prob.get(target_ans, 0.0)
+            stats["sum_prob_true_norm2"] += norm_prob2.get(true_ans, 0.0)
+            stats["sum_prob_target_norm2"] += norm_prob2.get(target_ans, 0.0)
 
             stats["sum_prob_true_filtered"] += filtered_prob_dict.get(true_ans, 0.0)
             stats["sum_prob_target_filtered"] += filtered_prob_dict.get(target_ans, 0.0)
@@ -195,6 +209,9 @@ def evaluate_steering_vector(model, processor, dataloader, steering_vector, targ
                 "avg_prob_true_norm":   stats["sum_prob_true_norm"]   / total,
                 "avg_prob_target_norm": stats["sum_prob_target_norm"] / total,
 
+                "avg_prob_true_norm2":   stats["sum_prob_true_norm2"]   / total,
+                "avg_prob_target_norm2": stats["sum_prob_target_norm2"] / total,
+
                 "avg_prob_true_filtered":   stats["sum_prob_true_filtered"]   / total,
                 "avg_prob_target_filtered": stats["sum_prob_target_filtered"] / total,
             }
@@ -204,6 +221,8 @@ def evaluate_steering_vector(model, processor, dataloader, steering_vector, targ
                 "avg_prob_target": 0.0,
                 "avg_prob_true_norm": 0.0,
                 "avg_prob_target_norm": 0.0,
+                "avg_prob_true_norm2": 0.0,
+                "avg_prob_target_norm2": 0.0,
                 "avg_prob_true_filtered": 0.0,
                 "avg_prob_target_filtered": 0.0,
             }
@@ -223,23 +242,36 @@ def get_valid_probs(token_map, prob_dict):
     return norm_prob
 
 
-def top_p_probs(token_map, answ_token_probabs):
-    sorted_probs, sorted_idx = torch.sort(answ_token_probabs, descending=True)
-    cumulative = torch.cumsum(sorted_probs, dim=0)
+def top_p_probs(token_map, full_vocab_probs, threshold=0.7):
+    # 1. Sort the ENTIRE vocabulary probabilities
+    sorted_probs, sorted_vocab_ids = torch.sort(full_vocab_probs, descending=True)
+    cumulative = torch.cumsum(sorted_probs, dim=-1)
 
-    threshold = 0.7
+    # 2. Create the mask for Top-P
     mask = cumulative <= threshold
+    mask[0] = True  # Safety: always keep the top token
+    
+    # 3. Extract just the Top-P subset
+    top_p_probs = sorted_probs[mask]
+    top_p_vocab_ids = sorted_vocab_ids[mask]
+    
+    # Calculate the sum of the top-p subset for normalization
+    top_p_sum = top_p_probs.sum().item()
 
-    filtered_probs = sorted_probs[mask]
-    filtered_idx = sorted_idx[mask]
-    filtered_sum = filtered_probs.sum().item()
+    # Create a dictionary for instantly looking up if a token made the cut: {vocab_id: probability}
+    top_p_dict = {
+        vid.item(): p.item() 
+        for vid, p in zip(top_p_vocab_ids, top_p_probs)
+    }
 
+    # 4. Intersect with your valid answers
     filtered_prob_dict = {}
-    for p, idx in zip(filtered_probs, filtered_idx):
-        tok = idx.item()
-        for answ, token_id in token_map.items():
-            if token_id == tok:
-                filtered_prob_dict[answ] = p.item() / filtered_sum
+    for answ, token_id in token_map.items():
+        if token_id in top_p_dict:
+            # The valid answer survived the top-p filter! 
+            # Normalize its probability against the top-p subset's total mass.
+            filtered_prob_dict[answ] = top_p_dict[token_id] / top_p_sum
+
     return filtered_prob_dict
 
 
@@ -270,6 +302,8 @@ def eval_ds_steered(mod, proc, answ_tokens, ds='100', vec_ds='100', layers=layer
                     stats["avg_prob_target"],
                     stats["avg_prob_true_norm"],
                     stats["avg_prob_target_norm"],
+                    stats["avg_prob_true_norm2"],
+                    stats["avg_prob_target_norm2"],
                     stats["avg_prob_true_filtered"],
                     stats["avg_prob_target_filtered"],
                 )
@@ -282,28 +316,67 @@ def eval_ds_steered(mod, proc, answ_tokens, ds='100', vec_ds='100', layers=layer
             for q_type, stats in metrics.items():
                 base = baseline_metrics[q_type]
 
+                # --- RAW ---
                 shift_true = stats["avg_prob_true"] - base["avg_prob_true"]
                 shift_target = stats["avg_prob_target"] - base["avg_prob_target"]
 
+                rel_true = shift_true / base["avg_prob_true"] if base["avg_prob_true"] != 0 else 0.0
+                rel_target = shift_target / base["avg_prob_target"] if base["avg_prob_target"] != 0 else 0.0
+
+                # --- NORM ---
                 shift_true_norm = stats["avg_prob_true_norm"] - base["avg_prob_true_norm"]
                 shift_target_norm = stats["avg_prob_target_norm"] - base["avg_prob_target_norm"]
 
+                rel_true_norm = shift_true_norm / base["avg_prob_true_norm"] if base["avg_prob_true_norm"] != 0 else 0.0
+                rel_target_norm = shift_target_norm / base["avg_prob_target_norm"] if base["avg_prob_target_norm"] != 0 else 0.0
+
+                # --- NORM2 ---
+                shift_true_norm2 = stats["avg_prob_true_norm2"] - base["avg_prob_true_norm2"]
+                shift_target_norm2 = stats["avg_prob_target_norm2"] - base["avg_prob_target_norm2"]
+
+                rel_true_norm2 = shift_true_norm2 / base["avg_prob_true_norm2"] if base["avg_prob_true_norm2"] != 0 else 0.0
+                rel_target_norm2 = shift_target_norm2 / base["avg_prob_target_norm2"] if base["avg_prob_target_norm2"] != 0 else 0.0
+
+                # --- FILTERED ---
                 shift_true_filtered = stats["avg_prob_true_filtered"] - base["avg_prob_true_filtered"]
                 shift_target_filtered = stats["avg_prob_target_filtered"] - base["avg_prob_target_filtered"]
 
-                stats["shift_true"] = shift_true
-                stats["shift_target"] = shift_target
-                stats["shift_true_norm"] = shift_true_norm
-                stats["shift_target_norm"] = shift_target_norm
-                stats["shift_true_filtered"] = shift_true_filtered
-                stats["shift_target_filtered"] = shift_target_filtered
+                rel_true_filtered = shift_true_filtered / base["avg_prob_true_filtered"] if base["avg_prob_true_filtered"] != 0 else 0.0
+                rel_target_filtered = shift_target_filtered / base["avg_prob_target_filtered"] if base["avg_prob_target_filtered"] != 0 else 0.0
+
+                # --- SAVE EVERYTHING ---
+                stats.update({
+                    "shift_true": shift_true,
+                    "shift_target": shift_target,
+                    "shift_true_norm": shift_true_norm,
+                    "shift_target_norm": shift_target_norm,
+                    "shift_true_norm2": shift_true_norm2,
+                    "shift_target_norm2": shift_target_norm2,
+                    "shift_true_filtered": shift_true_filtered,
+                    "shift_target_filtered": shift_target_filtered,
+
+                    "rel_true": rel_true,
+                    "rel_target": rel_target,
+                    "rel_true_norm": rel_true_norm,
+                    "rel_target_norm": rel_target_norm,
+                    "rel_true_norm2": rel_true_norm2,
+                    "rel_target_norm2": rel_target_norm2,
+                    "rel_true_filtered": rel_true_filtered,
+                    "rel_target_filtered": rel_target_filtered,
+                })
 
                 print(
                     mult, q_type,
-                    "RAW:", stats["avg_prob_true"], shift_true, stats["avg_prob_target"], shift_target,
-                    "NORM:", stats["avg_prob_true_norm"], shift_true_norm, stats["avg_prob_target_norm"], shift_target_norm,
-                    "FILT:", stats["avg_prob_true_filtered"], shift_true_filtered, stats["avg_prob_target_filtered"], shift_target_filtered
+                    "RAW:", stats["avg_prob_true"], shift_true, rel_true,
+                    stats["avg_prob_target"], shift_target, rel_target,
+                    "NORM:", stats["avg_prob_true_norm"], shift_true_norm, rel_true_norm,
+                    stats["avg_prob_target_norm"], shift_target_norm, rel_target_norm,
+                    "NORM2:", stats["avg_prob_true_norm2"], shift_true_norm2, rel_true_norm2,
+                    stats["avg_prob_target_norm2"], shift_target_norm2, rel_target_norm2,
+                    "FILT:", stats["avg_prob_true_filtered"], shift_true_filtered, rel_true_filtered,
+                    stats["avg_prob_target_filtered"], shift_target_filtered, rel_target_filtered
                 )
+
 
         with open(f"{res_sub_dir}_{ds}_{vec_ds}_{target_layer}.json", "w") as f:
             json.dump(sweep_results, f, indent=4)
