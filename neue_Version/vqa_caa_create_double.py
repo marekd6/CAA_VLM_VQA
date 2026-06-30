@@ -10,7 +10,8 @@ from tqdm import tqdm
 
 behaviour = 'count'
 opt = '_opt'
-opt = ''
+# opt = ''
+SYS_PROMP = 'Answer with the option number only' if opt != '' else ''
 
 model_id = "google/gemma-3-4b-it"
 
@@ -19,6 +20,7 @@ clevr_dir = '/informatik/wtm/datasets/External Datasets/CLEVR/CLEVR_v1.0'
 
 ds_dir_fn = f'{data_dir}/caa_{behaviour}_train{opt}'
 vect_dir_fn = ds_dir_fn
+vect_dir_fn = ds_dir_fn + '_SYMPR'
 img_pth = f'{clevr_dir}/images/train'
 layers = [x for x in range(34)]
 idx = 0  # global sample index
@@ -123,7 +125,13 @@ def generate_save_vectors_for_behavior(model, processor, dataloader, fn, target_
             target_ans = batch["target_answer"][0]
             image = batch["image"][0]
 
-            messages = [
+            messages = [{
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": SYS_PROMP}
+                    ]
+                }] if len(SYS_PROMP) > 0 else []
+            messages.append(
                 {
                     "role": "user",
                     "content": [
@@ -131,7 +139,7 @@ def generate_save_vectors_for_behavior(model, processor, dataloader, fn, target_
                         {"type": "text", "text": q}
                     ]
                 }
-            ]
+            )
             base_prompt = processor.apply_chat_template(
                 messages,
                 tokenize=False,

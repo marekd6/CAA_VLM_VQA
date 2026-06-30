@@ -8,6 +8,7 @@ from collections import defaultdict
 from tqdm import tqdm
 from pathlib import Path
 import gc
+from vqa_caa_create_double import SYS_PROMP
 
 
 behaviour = 'count'
@@ -21,7 +22,9 @@ clevr_dir = '/informatik/wtm/datasets/External Datasets/CLEVR/CLEVR_v1.0'
 
 ds_dir_fn = f'{data_dir}/caa_{behaviour}_val{opt}'
 vect_dir_fn = f'{data_dir}/caa_{behaviour}_train{opt}'
+vect_dir_fn = f'{data_dir}/caa_{behaviour}_train{opt}' + '_SYMPR'
 res_sub_dir = f'{data_dir}/res/caa_{behaviour}_train{opt}'
+res_sub_dir = f'{data_dir}/res_SYMPR/caa_{behaviour}_train{opt}'
 img_pth = f'{clevr_dir}/images/val'
 layers = [x for x in range(34)]
 multipliers = [x / 2.0 for x in range(-4, 4, 1)] + [2.0]
@@ -145,7 +148,13 @@ def evaluate_steering_vector(model, processor, dataloader, steering_vector, targ
             target_ans = batch["target_answer"][0]
             q_type = batch["q_type"][0]
 
-            messages = [
+            messages = [{
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": SYS_PROMP}
+                    ]
+                }] if len(SYS_PROMP) > 0 else []
+            messages.append(
                 {
                     "role": "user",
                     "content": [
@@ -153,7 +162,7 @@ def evaluate_steering_vector(model, processor, dataloader, steering_vector, targ
                         {"type": "text", "text": q}
                     ]
                 }
-            ]
+            )
 
             eval_prompt = processor.apply_chat_template(
                 messages,
@@ -396,7 +405,7 @@ def main():
           print(a, t)
       eval_ds_steered(mod, proc, answ_tokens, '10', '10')
       eval_ds_steered(mod, proc, answ_tokens, '10', '100')
-      eval_ds_steered(mod, proc, answ_tokens, '100')
+      eval_ds_steered(mod, proc, answ_tokens, '100', '100')
     #   eval_ds_steered(mod, proc, answ_tokens, '500')
       print('c')
     finally:
