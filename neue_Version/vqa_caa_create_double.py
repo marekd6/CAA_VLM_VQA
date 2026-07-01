@@ -187,7 +187,7 @@ def gen_ds_steering_vect(mod, proc, ds='100', layers=layers, ds_dir_fn=ds_dir_fn
 
 def main():
     proc, mod = load_model()
-    # gen_ds_steering_vect(mod, proc, '10')
+    gen_ds_steering_vect(mod, proc, '10')
     gen_ds_steering_vect(mod, proc, '100')
     # gen_ds_steering_vect(mod, proc, '500')
     # gen_ds_steering_vect(mod, proc, '1000')
