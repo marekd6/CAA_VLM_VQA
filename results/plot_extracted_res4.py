@@ -1,5 +1,6 @@
 import json
 import matplotlib.pyplot as plt
+import os
 
 
 METR1 = [
@@ -17,13 +18,6 @@ METR2 = [
 ]
 
 METR3 = [
-    "rel_true_norm2",
-    "rel_target_norm2",
-    "rel_true",
-    "rel_target",
-]
-
-METR4 = [
     "shift_true_filtered",
     "shift_target_filtered",
     "rel_true_filtered",
@@ -31,7 +25,7 @@ METR4 = [
 ]
 
 
-def draw_plot(data, mult, tit, fn, metrics=METR1):
+def draw_plot(data, mult, tit, fn, task="count", metrics=METR1, sys=False):
     with open(data) as f:
         data = json.load(f)
     
@@ -46,7 +40,7 @@ def draw_plot(data, mult, tit, fn, metrics=METR1):
         for s in mult:
             key = str(float(s))
 
-            values = data[key]["count"][metric]
+            values = data[key][task][metric]
 
             x = sorted(map(int, values.keys()))
             y = [values[str(v)] for v in x]
@@ -64,35 +58,29 @@ def draw_plot(data, mult, tit, fn, metrics=METR1):
     yabs_max = abs(max(ax.get_ylim(), key=abs))
     ax.set_ylim(ymin=-yabs_max, ymax=yabs_max)
 
-    fig.suptitle(tit)
-    # plt.show()
+    tit = tit.split('_')
+    sys_opt_prt = 'SYSP_OPT' if sys else 'OPT'
+    fig.suptitle(f"Steering into false random {task}ing, {sys_opt_prt if len(tit) > 2 else ''}, vect={tit[-1]}, test={tit[-2]}")
     plt.savefig(fn)
 
 
+def process_dir_res(dir, sys=False, MX=[METR1, METR2, METR3]):
+    files = [f for f in os.listdir(dir) if f.endswith('.json')]
+    print(files)
+    for f in files:
+        print(f)
+        name = f.replace('.json', '').split('_')
+        print(name)
+        src = os.path.join(dir, f)
+        for i, met in enumerate(MX):
+            for t in ["count"]:
+                for mult in [(-2, 2)]:
+                    title = '_'.join(name[3:len(name)-1])
+                    fn = f'{title}_met{i}.png'
+                    print(title, fn)
+                    draw_plot(src, mult, title, os.path.join(dir, fn), t, met, sys)
+
+
 if __name__ == '__main__':
-    # draw_plot('gelungene_runs/caa_count_train_opt_100_100_combined.json', (-2, 2), 
-    #           "Steering into false random counting, vect=100, test=100, closed choice opt", 'cnt_100_100_opt.png')
-    # draw_plot('gelungene_runs/caa_count_train_100_combined.json', (-2, 2),
-    #           "Steering into false random counting, vect=100, test=100", 'cnt_100.png')
-    # draw_plot('caa_count_train_opt_10_100_combined2.json', (-2, 2),
-    #           "Steering into false random counting, vect=100, test=10", 'cnt_10_100_v2.png')
-    # draw_plot('caa_count_train_opt_10_100_combined2.json', (-2, 2),
-    #           "Steering into false random counting, vect=100, test=10", 'cnt_10_100_v2_2.png', METR2)
-    # draw_plot('caa_count_train_opt_10_100_combined2.json', (-2, 2),
-    #           "Steering into false random counting, vect=100, test=10", 'cnt_10_100_v2_3.png', METR3)
-    # draw_plot('caa_count_train_opt_10_100_combined22.json', (-2, 2),
-    #           "Steering into false random counting, vect=100, test=10", 'cnt_10_100_v22.png')
-    # draw_plot('caa_count_train_opt_10_100_combined22.json', (-2, 2),
-    #           "Steering into false random counting, vect=100, test=10", 'cnt_10_100_v22_2.png', METR2)
-    # draw_plot('caa_count_train_opt_10_100_combined22.json', (-2, 2),
-    #           "Steering into false random counting, vect=100, test=10", 'cnt_10_100_v22_3.png', METR3)
-    draw_plot('caa_count_train_opt_10_100_combined22.json', (-2, 2),
-              "Steering into false random counting, vect=100, test=10", 'cnt_10_100_v22_4.png', METR4)
-    # draw_plot('caa_count_train_opt_100_100_combined22.json', (-2, 2),
-    #           "Steering into false random counting, SYSP_OPT, vect=100, test=100", 'cnt_100_100_v2.png')
-    # draw_plot('caa_count_train_opt_100_100_combined22.json', (-2, 2),
-    #           "Steering into false random counting, SYSP_OPT, vect=100, test=100", 'cnt_100_100_v2_2.png', METR2)
-    # draw_plot('caa_count_train_opt_100_100_combined22.json', (-2, 2),
-    #           "Steering into false random counting, SYSP_OPT, vect=100, test=100", 'cnt_100_100_v2_3.png', METR3)
-    draw_plot('caa_count_train_opt_100_100_combined22.json', (-2, 2),
-              "Steering into false random counting, SYSP_OPT, vect=100, test=100", 'cnt_100_100_v2_4.png', METR4)
+    process_dir_res('results/V2/just', sys=True)
+    process_dir_res('results/V1/just', MX=[METR1])
