@@ -11,7 +11,7 @@ from tqdm import tqdm
 behaviour = 'count'
 opt = '_opt'
 # opt = ''
-SYS_PROMP = 'Answer with the option number only' if opt != '' else ''
+SYS_PROMP = 'Answer with the letter number only' if opt != '' else ''
 
 model_id = "google/gemma-3-4b-it"
 

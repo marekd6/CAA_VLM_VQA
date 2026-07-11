@@ -3,6 +3,7 @@ import torch.nn.functional as F
 from PIL import Image
 from transformers import AutoProcessor, Gemma3ForConditionalGeneration
 import json
+import string
 from torch.utils.data import Dataset, DataLoader
 from collections import defaultdict
 from tqdm import tqdm
@@ -36,7 +37,8 @@ def gen_true_answers() -> list:
     return ['2']
 
 beh_answers = gen_true_answers()
-beh_answers = beh_answers if opt == '' else [str(i) for i in range(len(beh_answers))]
+uppercase_alphabet = string.ascii_uppercase
+beh_answers = beh_answers if opt == '' else uppercase_alphabet[:len(beh_answers)]
 
 
 def load_model():
